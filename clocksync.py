@@ -7,22 +7,22 @@ import struct
 import select
 import sys
 import os
-import fcntl
 import netifaces
 
-BULLY_REQUEST = 0
-BULLY_ANSWER = 1
-BULLY_ANNOUNCE = 2
-BERKELEY_REQUEST = 3
-BERKELEY_RESPONSE = 4
-BERKELEY_ADJUST = 5
+BULLY_REQUEST       = 0
+BULLY_ANSWER        = 1
+BULLY_ANNOUNCE      = 2
+BERKELEY_REQUEST    = 3
+BERKELEY_RESPONSE   = 4
+BERKELEY_ADJUST     = 5
 
-interval = 0.2
+INTERVAL    = 0.5
+TIMEOUT     = 2.0
+
 
 MULTICAST_GROUP = '224.0.0.0'
-PORT = 1234
-SERVER_ADDRESS = ('', PORT)
-
+PORT            = 1234
+SERVER_ADDRESS  = ('', PORT)
 
 class Packet:
     def __init__(self, type_msg, content):
@@ -30,184 +30,158 @@ class Packet:
         self.content = content
 
 
-class Bully:
-    currClock = 10000
+class Node:
+    currClock = 0
     delay = 0
-    coord = False
-    ip_coord = ''
-    myaddr = ''
-    wait_asnwer = False
-    temp_coor = False
-    berk_list = []
+    isCoord = False
+    ipCoord = ''
+    myAddr = ''
+    tempCoord = False
+    nodeList = []
 
     def clock(self):
         while True:
             self.currClock += self.delay
-            time.sleep(interval)
+            time.sleep(INTERVAL)
 
     def handleUDPPacket(self, sock):
         data, addr = sock.recvfrom(1024)
         msg = pickle.loads(data)
-        if addr[0] == self.myaddr:
+        if addr[0] == self.myAddr:
             return None
-        if msg.type_msg == BULLY_REQUEST and not self.wait_asnwer:
-            print('Received bully request with pid', msg.content)
+        if msg.type_msg == BULLY_REQUEST:
+            print('Requisicao bully recebido com pid', msg.content)
             if os.getpid() > int(msg.content):
-                print('Sending back my pid', os.getpid())
-                sock.sendto(pickle.dumps(
-                    Packet(BULLY_ANSWER, os.getpid())), addr)
-        elif msg.type_msg == BULLY_ANSWER and self.wait_asnwer:
-            print('Received packet-> Type: ', msg.type_msg,
-                  '. Content: ', msg.content, '. From:', addr)
-            self.temp_coor = False
+                                print('Enviando de volta pid', os.getpid())
+                                sock.sendto(pickle.dumps(Packet(BULLY_ANSWER, os.getpid())), addr)
+        elif msg.type_msg == BULLY_ANSWER:
+            print('Resposta da requisicao bully recebida com pid', int(msg.content), 'de', addr)
+            self.tempCoord = False
             self.ip_coord = addr[0]
         elif msg.type_msg == BULLY_ANNOUNCE:
-            print('New master: ', msg.content)
+            print('Novo mestre: ', msg.content)
             self.ip_coord = msg.content
-            self.coord = False
+            self.isCoord = False
         elif msg.type_msg == BERKELEY_REQUEST:
-            print('Received clock difference', int(msg.content), 'from', addr)
             diff = self.currClock - int(msg.content)
-            print('Sending clock difference', diff, 'of clock', self.currClock)
+            print('Enviando diferenca do relogio', diff, 'Relogio:', self.currClock)
             msg = Packet(BERKELEY_RESPONSE, str(diff))
             sock.sendto(pickle.dumps(msg), addr)
         elif msg.type_msg == BERKELEY_RESPONSE:
-            self.berk_list.append((addr, msg.content))
-            print('Received clock difference', int(msg.content), 'from', addr)
+            self.nodeList.append((addr, msg.content))
+            print('Recebida diferenca do relogio', int(msg.content), 'de', addr)
         elif msg.type_msg == BERKELEY_ADJUST:
-            print('Received clock adjust: ', int(msg.content))
-            print('Changing the clock from', self.currClock,
-                  'to', self.currClock + int(msg.content))
+            print('Recebido ajuste de relogio: ', int(msg.content))
+            print('Alterando relogio de', self.currClock, 'para', self.currClock + int(msg.content))
             self.currClock = self.currClock + int(msg.content)
 
     def annouceVictory(self, sock):
-        print('Annouces victory')
-        msg = Packet(BULLY_ANNOUNCE, self.myaddr)
+        print('Anuncia vitoria')
+        msg = Packet(BULLY_ANNOUNCE, self.myAddr)
         sock.sendto(pickle.dumps(msg), (MULTICAST_GROUP, PORT))
 
-    def sendBullyRequest(self, sock):
+    def startBully(self, sock):
         pid = str(os.getpid())
-        print('Sending BullyRequest with pid: ', pid)
+        print('Enviando requisicao bully com pid: ', pid)
         msg = Packet(BULLY_REQUEST, pid)
         sock.sendto(pickle.dumps(msg), (MULTICAST_GROUP, PORT))
-
-        print('Waiting asnwers...')
-        self.wait_asnwer = True
-        self.temp_coor = True
-        timeout = 2.0
-        r_time = 0.0
+        print('Aguardando respostas...')
+        self.tempCoord = True
+        remaining_time = time.time() + TIMEOUT
         while True:
-            b_time = time.time()
-            timeout = timeout - r_time
-            if(timeout <= 0.0):
+            if(time.time() >= remaining_time):
                 break
-            r, w, e = select.select([sock], [], [sock], timeout)
+            r, w, e = select.select([sock], [], [sock], remaining_time - time.time())
             if not r:
                 break
-            for io2 in r:
-                self.handleUDPPacket(io2)
-            r_time = time.time() - b_time
-        self.wait_asnwer = False
-        if self.temp_coor == True:
-            print("I'm the new coordinator")
+            for io in r:
+                self.handleUDPPacket(io)
+        if self.tempCoord == True:
+            print("Sou o novo isCoordenador!")
             self.annouceVictory(sock)
-            self.coord = True
+            self.isCoord = True
         else:
-            print("I'm not the coordinator")
-            self.coord = False
+            print("Nao sou o isCoordenador")
+            self.isCoord = False
 
     def startBerkeley(self, sock):
-        print('Starting berkeley algorithm...')
-        print('Sending clock', self.currClock)
+        print('Iniciando o algoritmo de Berkeley...')
+        print('Enviando relogio', self.currClock)
         msg = Packet(BERKELEY_REQUEST, self.currClock)
         sock.sendto(pickle.dumps(msg), (MULTICAST_GROUP, PORT))
-        timeout = 2.0
-        r_time = 0.0
+        remaining_time = time.time() + TIMEOUT
         while True:
-            b_time = time.time()
-            timeout = timeout - r_time
-            if(timeout <= 0.0):
+            if(time.time() >= remaining_time):
                 break
-            r, w, e = select.select([sock], [], [sock], timeout)
+            r, w, e = select.select([sock], [], [sock], remaining_time - time.time())
             if not r:
                 break
-            for io2 in r:
-                self.handleUDPPacket(io2)
-            r_time = time.time() - b_time
-        print('Berkeley list:')
-        media = 0.0
-        for x, y in self.berk_list:
-            media += int(y)
-        media = int(media / (len(self.berk_list) + 1))
-        for x, y in self.berk_list:
-            msg = Packet(BERKELEY_ADJUST, str(media - int(y)))
-            print('Adjust for', x, ':', media - int(y))
-            sock.sendto(pickle.dumps(msg), x)
+            for io in r:
+                self.handleUDPPacket(io)
 
-        print('Changing master clock from',
-              self.currClock, 'to', self.currClock + media)
+        print('Lista de escravos:')
+        media = 0.0
+        for addr, content in self.nodeList:
+            media += int(content)
+        media = int(media / (len(self.nodeList) + 1))
+        for addr, content in self.nodeList:
+            msg = Packet(BERKELEY_ADJUST, str(media - int(content)))
+            print('Ajusta relogio de', addr, ':', 'para', media - int(content))
+            sock.sendto(pickle.dumps(msg), addr)
+
+        print('Alterando o relogio do mestre de', self.currClock, 'para', self.currClock + media)
         self.currClock += media
-        self.berk_list.clear()
+        self.nodeList.clear()
 
     def run(self):
         print('Escolha a interface de rede a ser usada:')
         for i, val in enumerate(netifaces.interfaces()):
             print(i, '-', val)
+        while True:
+            print('Digite:')
+            try:
+                opt = int(sys.stdin.readline())
+                if opt >= len(netifaces.interfaces()) or opt < 0:
+                    raise Exception()
+            except Exception:
+                print('Entrada invalida')
+            else:
+                break
+        self.myAddr = str(netifaces.ifaddresses(netifaces.interfaces()[opt])[2][0]['addr'])
+        print('Utilizando o ip ', self.myAddr)
 
-        print('Digite:')
-        opt = sys.stdin.readline()
-        self.myaddr = str(netifaces.ifaddresses(
-            netifaces.interfaces()[int(opt)])[2][0]['addr'])
-        print('Utilizando o ip ', self.myaddr)
+        while True:
+            print('Defina um delay para o relógio(em ms):')
+            try:
+                self.delay = int(sys.stdin.readline())
+                if self.delay <= 0:
+                    raise Exception()
+            except Exception:
+                print('Entrada invalida')
+            else:
+                break
 
-        print('Defina um delay para o relógio(em ms):')
-        self.delay = int(sys.stdin.readline())
         Thread(target=self.clock).start()
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
         self.sock.bind(SERVER_ADDRESS)
         group = socket.inet_aton(MULTICAST_GROUP)
-
         mreq = struct.pack('4sL', group, socket.INADDR_ANY)
-        self.sock.setsockopt(
-            socket.IPPROTO_IP,
-            socket.IP_ADD_MEMBERSHIP,
-            mreq)
+        self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
 
         inputs = [self.sock, sys.stdin]
         outputs = []
         while True:
-            print("Waiting...")
-            readable, writable, exceptional = select.select(
-                inputs, outputs, inputs)
+            print("Aguardando acao...")
+            readable, writable, exceptional = select.select(inputs, outputs, inputs)
             for io in readable:
                 if io == self.sock:
                     self.handleUDPPacket(self.sock)
                 elif io == sys.stdin:
-                    self.sendBullyRequest(self.sock)
+                    self.startBully(self.sock)
                     sys.stdin.readline()
-                    if self.coord == True:
+                    if self.isCoord == True:
                         self.startBerkeley(self.sock)
 
-
-bully = Bully()
-bully.run()
-
-
-'''
-t = []
-
-delay = random.randint(1, 10)
-t.append((1, Thread(target=clock, args=('thread1', 1))))
-
-delay = random.randint(1, 10)
-t.append((2, Thread(target=clock, args=('thread2', 2))))
-
-for x in t:
-	x[1].start()
-
-for x in t:
-	x[1].join()
-	print(x[0], ' finished!')
-'''
+node = Node()
+node.run()
