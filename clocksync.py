@@ -52,8 +52,8 @@ class Node:
         if msg.type_msg == BULLY_REQUEST:
             print('Requisicao bully recebido com pid', msg.content)
             if os.getpid() > int(msg.content):
-                                print('Enviando de volta pid', os.getpid())
-                                sock.sendto(pickle.dumps(Packet(BULLY_ANSWER, os.getpid())), addr)
+                print('Enviando de volta pid', os.getpid())
+                sock.sendto(pickle.dumps(Packet(BULLY_ANSWER, os.getpid())), addr)
         elif msg.type_msg == BULLY_ANSWER:
             print('Resposta da requisicao bully recebida com pid', int(msg.content), 'de', addr)
             self.tempCoord = False
@@ -97,11 +97,11 @@ class Node:
             for io in r:
                 self.handleUDPPacket(io)
         if self.tempCoord == True:
-            print("Sou o novo isCoordenador!")
+            print("Sou o novo coordenador!")
             self.annouceVictory(sock)
             self.isCoord = True
         else:
-            print("Nao sou o isCoordenador")
+            print("Nao sou o coordenador")
             self.isCoord = False
 
     def startBerkeley(self, sock):
@@ -126,9 +126,8 @@ class Node:
         media = int(media / (len(self.nodeList) + 1))
         for addr, content in self.nodeList:
             msg = Packet(BERKELEY_ADJUST, str(media - int(content)))
-            print('Ajusta relogio de', addr, ':', 'para', media - int(content))
+            print('Ajusta relogio de', addr, ':', 'em', media - int(content))
             sock.sendto(pickle.dumps(msg), addr)
-
         print('Alterando o relogio do mestre de', self.currClock, 'para', self.currClock + media)
         self.currClock += media
         self.nodeList.clear()
@@ -183,5 +182,6 @@ class Node:
                     if self.isCoord == True:
                         self.startBerkeley(self.sock)
 
-node = Node()
-node.run()
+if __name__ == '__main__':
+    node = Node()
+    node.run()
